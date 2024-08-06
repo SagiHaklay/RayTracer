@@ -3,6 +3,7 @@ from PIL import Image
 import numpy as np
 
 from camera import Camera
+from intersection import Intersection
 from light import Light
 from material import Material
 from scene_settings import SceneSettings
@@ -53,11 +54,57 @@ def save_image(image_array):
     # Save the image to a file
     image.save("scenes/Spheres.png")
 
+def calc_transparency(settings: SceneSettings, intersection: Intersection, camera: Camera, lights, surfaces: list):
+    view_vec = camera.position - intersection.point
+    view_vec /= np.linalg.norm(view_vec)
+    # get from ray
+
+    trans_stack = []
+    recursion_count = settings.max_recursions
+    trans_intersect = intersection
+    while recursion_count > 0 and trans_intersect.material.transparency > 0:
+        # remove current intersection surface from surfaces
+        # construct transparenct ray and find next intersection excluding current surface
+        # push intersection to stack
+        trans_stack.push(trans_intersect)
+        recursion_count -= 1
+
+    bg_color = settings.background_color
+    while len(trans_stack) > 0:
+        trans_intersect = trans_stack.pop()
+        refl_color = calc_reflection(settings, trans_intersect, camera, lights, surfaces)
+        bg_color = calc_color(trans_intersect, bg_color, refl_color, lights, camera, settings)
+
+    return bg_color
+
+def calc_reflection(settings: SceneSettings, intersection: Intersection, camera: Camera, lights, surfaces):
+    view_vec = camera.position - intersection.point
+    view_vec /= np.linalg.norm(view_vec)
+    # get from ray
+    
+    refl_stack = []
+    recursion_count = settings.max_recursions
+    while recursion_count > 0:
+        refl_view_vec = 2 * np.dot(view_vec, intersection.normal) * intersection.normal - view_vec
+        # construct reflected ray and find intersection
+        # if there is no intersection exit loop
+        # otherwise push intersection to stack
+        recursion_count -= 1
+
+    refl_color = settings.background_color
+    while len(refl_stack) > 0:
+        refl_intersect = refl_stack.pop()
+        bg_color = calc_transparency(settings, refl_intersect, camera, lights, surfaces)
+        refl_color = calc_color(refl_intersect, bg_color, refl_color, lights, camera, settings)
+
+    return refl_color
+
 def calc_soft_shadows(light: Light, point: np.ndarray, scene_settings: SceneSettings):
     # find a plane which is perpendicular to the ray between the point and the light
     light_vec = light.position - point
+    light_vec /= np.linalg.norm(light_vec)
     vx = np.random.randn(3)
-    vx -= vx.dot(light_vec) * light_vec / np.linalg.norm(light_vec)**2
+    vx -= vx.dot(light_vec) * light_vec
     vx /= np.linalg.norm(vx)
     vy = np.cross(light_vec, vx)
     # construct a rectangle on the plane centered in the light position and as wide as the light radius
@@ -80,7 +127,10 @@ def calc_soft_shadows(light: Light, point: np.ndarray, scene_settings: SceneSett
     light_intensity = 1 - light.shadow_intensity + light.shadow_intensity * hit_fraction
     return light_intensity
 
-def calc_color_by_light(point: np.ndarray, norm: np.ndarray, material: Material, light: Light, camera: Camera , scene_settings: SceneSettings):
+def calc_color_by_light(intersection: Intersection, light: Light, camera: Camera , scene_settings: SceneSettings):
+    point = intersection.point
+    norm = intersection.normal
+    material = intersection.material
     light_vec = light.position - point
     light_vec /= np.linalg.norm(light_vec)
     diffuse = material.diffuse_color * np.dot(light_vec, norm) * light.color
@@ -92,12 +142,13 @@ def calc_color_by_light(point: np.ndarray, norm: np.ndarray, material: Material,
     return (diffuse + specular) * light_intensity
 
 
-def calc_color(point: np.ndarray, norm: np.ndarray, material: Material, bg_color, refl_color: np.ndarray, lights, camera: Camera, scene_settings: SceneSettings):
+def calc_color(intersection: Intersection, bg_color, refl_color: np.ndarray, lights, camera: Camera, scene_settings: SceneSettings):
     color = np.zeros(3)
+    material = intersection.material
     for light in lights:
-        color += calc_color_by_light(point, norm, material, light, camera, scene_settings)
+        color += calc_color_by_light(intersection, light, camera, scene_settings)
     color *= (1 - material.transparency)
-    color += material.transparency * bg_color + refl_color
+    color += material.transparency * bg_color + refl_color * material.reflection_color
 
     return color
 
